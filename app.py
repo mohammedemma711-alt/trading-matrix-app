@@ -1,12 +1,41 @@
 import streamlit as st
-import pandas as pd
 import yfinance as yf
+import pandas as pd
 import numpy as np
+import plotly.graph_objects as go
+from datetime import datetime
 
-# =====================================================================
-# 📥 LAYER 1: MULTI-ASSET MARKET DATA ENGINE
-# =====================================================================
-class DataEngine:
+# ==========================================
+# PAGE CONFIGURATION & THEME
+# ==========================================
+st.set_page_config(page_title="Algorithmic Matrix Suite Pro", layout="wide")
+
+st.markdown("""
+    <style>
+    .reportview-container { background: #0e1117; }
+    .stMetric { background-color: #1e293b; padding: 15px; border-radius: 10px; border: 1px solid #334155; }
+    </style>
+""", unsafe_style=html=True)
+
+# ==========================================
+# 🧠 MEMORY MANAGEMENT LAYER (STATE ENGINE)
+# ==========================================
+if "active_trade" not in st.session_state:
+    st.session_state.active_trade = {
+        "status": "IDLE",       # IDLE, PENDING, ACTIVE, WON, LOST
+        "ticker_label": None,
+        "ticker_symbol": None,
+        "direction": None,      # BUY or SELL
+        "entry_poi": None,
+        "sl": None,
+        "tp": None,
+        "strategy_source": None 
+    }
+
+# ==========================================
+# 📡 DATA ENGINE (TRI-TIMEFRAME GENERATION)
+# ==========================================
+class MultiTimeframeEngine:
     def __init__(self):
         self.ticker_map = {
             "XAUUSD (Gold)": "GC=F",
@@ -18,340 +47,261 @@ class DataEngine:
             "NAS100 (Nasdaq 100)": "^NDX"
         }
 
-    def fetch_candles(self, user_symbol, interval="4h"):
-        ticker = self.ticker_map.get(user_symbol)
-        if not ticker: return None
-        period = "60d" if interval == "4h" else "730d"
+    def fetch_market_data(self, label):
+        symbol = self.ticker_map.get(label, "BTC-USD")
         try:
-            asset = yf.Ticker(ticker)
-            df = asset.history(period=period, interval=interval)
-            if df.empty: return None
-            df = df.reset_index()
-            df = df.rename(columns={'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close', 'Volume': 'volume'})
-            return df[['open', 'high', 'low', 'close', 'volume']]
-        except:
-            return None
+            df_4h = yf.download(symbol, period="60d", interval="4h", progress=False)
+            df_1h = yf.download(symbol, period="30d", interval="1h", progress=False)
+            df_15m = yf.download(symbol, period="7d", interval="15m", progress=False)
+            
+            for df in [df_4h, df_1h, df_15m]:
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+                    
+            return df_4h, df_1h, df_15m, symbol
+        except Exception as e:
+            st.error(f"Data engine stream timeout: {str(e)}")
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), symbol
 
-# =====================================================================
-# 🏦 LAYER 2: PREDICTIVE PRICE ACTION, SMC & FIBONACCI MATRIX ENGINE
-# =====================================================================
-class MasterTradingEngine:
+# ==========================================
+# 📊 MATHEMATICAL STRATEGY FRAMEWORK
+# ==========================================
+class TechnicalMatrix:
     @staticmethod
-    def identify_swings(df, window=7):
-        highs = df['high'].values
-        lows = df['low'].values
-        swing_highs = []
-        swing_lows = []
+    def extract_fib_and_ob(df):
+        """Calculates Order Blocks and Fibonacci Retracements"""
+        if df.empty or len(df) < 50:
+            return 0, 0, 0, "No Block Found"
         
-        for i in range(window, len(df) - window):
-            if highs[i] == max(highs[i-window:i+window+1]):
-                swing_highs.append((i, highs[i]))
-            if lows[i] == min(lows[i-window:i+window+1]):
-                swing_lows.append((i, lows[i]))
-        return swing_highs, swing_lows
-
-    @staticmethod
-    def check_candle_confirmations(df):
-        if len(df) < 3: return "NONE", 0
-        c1, c2 = df.iloc[-2], df.iloc[-1]
-        c1_body, c2_body, c2_total = abs(c1['close'] - c1['open']), abs(c2['close'] - c2['open']), c2['high'] - c2['low']
+        high_max = float(df['High'].max())
+        low_min = float(df['Low'].min())
+        diff = high_max - low_min
         
-        if c2['close'] > c2['open'] and c1['close'] < c1['open'] and c2['close'] > c1['open'] and c2['open'] < c1['close']:
-            return "BULLISH_ENGULFING", 3
-        if c2['close'] < c2['open'] and c1['close'] > c1['open'] and c2['close'] < c1['open'] and c2['open'] > c1['close']:
-            return "BEARISH_ENGULFING", 3
-        if c2_total > 0:
-            if (min(c2['open'], c2['close']) - c2['low']) / c2_total > 0.60 and (c2_body / c2_total) < 0.30:
-                return "BULLISH_HAMMER", 3
-            if (c2['high'] - max(c2['open'], c2['close'])) / c2_total > 0.60 and (c2_body / c2_total) < 0.30:
-                return "BEARISH_SHOOTING_STAR", 3
-        return "NONE", 0
+        golden_pocket = high_max - (diff * 0.618)
+        tp_target = high_max - (diff * 0.236)
+        
+        ob_price = float(df['Close'].iloc[-12])
+        ob_type = "Bullish OB" if float(df['Close'].iloc[-1]) > ob_price else "Bearish OB"
+        
+        return golden_pocket, tp_target, ob_price, ob_type
 
     @staticmethod
-    def analyze_market(df, style="Day Trade"):
-        signals = []
-        strategies_used = []
-        metrics = {
-            "support": None, "resistance": None, "order_block": None, 
-            "breaker_block": None, "trendline_bias": "NEUTRAL", "pattern": None,
-            "bos": False, "retest": False, "rejection": False, "bias": "NEUTRAL",
-            "candle_pattern": "NONE", "candle_score": 0, "predicted_poi": None,
-            "fib_618": None, "fib_382": None, "fib_786": None  # <-- Fibonacci metrics initialized
-        }
-        
-        if len(df) < 30: return signals, strategies_used, metrics
-        
-        current_price = df['close'].iloc[-1]
-        prev_price = df['close'].iloc[-2]
-        
-        # 1. Candlestick Confirmations
-        candle_pattern, candle_score = MasterTradingEngine.check_candle_confirmations(df)
-        metrics["candle_pattern"] = candle_pattern
-        metrics["candle_score"] = candle_score
-        if candle_pattern != "NONE":
-            signals.append(f"Candle Confirmation: {candle_pattern}")
-            strategies_used.append("Candlestick Momentum Analysis")
+    def detect_fair_value_gaps(df):
+        """Identifies Unmitigated Fair Value Gaps (FVG)"""
+        fvg_list = []
+        if len(df) < 4:
+            return fvg_list
 
-        # 2. Base Support and Resistance Zones
-        lookback = 30 if style == "Day Trade" else 90
-        metrics["resistance"] = df['high'].tail(lookback).max()
-        metrics["support"] = df['low'].tail(lookback).min()
-        
-        # =====================================================================
-        # 📐 NEW: INTEGRATED AUTOMATED FIBONACCI GRID CALCULATOR
-        # =====================================================================
-        high_anchor = metrics["resistance"]
-        low_anchor = metrics["support"]
-        price_range = high_anchor - low_anchor
-        
-        # Standard institutional calculation layout
-        metrics["fib_382"] = high_anchor - (price_range * 0.382)
-        metrics["fib_618"] = high_anchor - (price_range * 0.618)  # Golden Pocket Marker
-        metrics["fib_786"] = high_anchor - (price_range * 0.786)
-        strategies_used.append("Automated Fibonacci Retracement Engine")
-        
-        # 3. Break & Retest
-        if prev_price > metrics["resistance"] and current_price <= metrics["resistance"] * 1.003 and current_price >= metrics["resistance"] * 0.997:
-            signals.append("Macro Break & Retest Setup")
-            strategies_used.append("S/R Role Reversal Filter")
-            metrics["retest"] = True
-            metrics["bias"] = "LONG"
+        for i in range(1, len(df) - 1):
+            if float(df['High'].iloc[i-1]) < float(df['Low'].iloc[i+1]) and float(df['Close'].iloc[i]) > float(df['Open'].iloc[i]):
+                fvg_top = float(df['Low'].iloc[i+1])
+                fvg_bottom = float(df['High'].iloc[i-1])
+                fvg_list.append({"type": "BULLISH FVG", "top": fvg_top, "bottom": fvg_bottom, "mid": (fvg_top + fvg_bottom)/2})
             
-        # 4. Liquidity Rejections
-        latest_candle = df.iloc[-1]
-        body_size, total_size = abs(latest_candle['close'] - latest_candle['open']), latest_candle['high'] - latest_candle['low']
-        if total_size > 0 and (body_size / total_size) < 0.25:
-            if latest_candle['low'] <= metrics["support"] * 1.008:
-                signals.append("Macro Liquidity Rejection Floor")
-                strategies_used.append("Liquidity Pool Sweep Validation")
-                metrics["rejection"] = True
-                metrics["bias"] = "LONG"
-            elif latest_candle['high'] >= metrics["resistance"] * 0.992:
-                signals.append("Macro Liquidity Rejection Ceiling")
-                strategies_used.append("Liquidity Pool Sweep Validation")
-                metrics["rejection"] = True
-                metrics["bias"] = "SHORT"
-
-        # Structural Swings Mapping
-        sh, sl = MasterTradingEngine.identify_swings(df)
-        
-        if len(sh) >= 3 and len(sl) >= 3:
-            last_high_idx, last_high_val = sh[-1]
-            last_low_idx, last_low_val = sl[-1]
-            
-            # 5. BOS Detection
-            if current_price > last_high_val:
-                signals.append("Market Structure Break (BOS - Bullish)")
-                strategies_used.append("Market Structure Break (BOS)")
-                metrics["bos"] = True
-                metrics["bias"] = "LONG"
-            elif current_price < last_low_val:
-                signals.append("Market Structure Break (BOS - Bearish)")
-                strategies_used.append("Market Structure Break (BOS)")
-                metrics["bos"] = True
-                metrics["bias"] = "SHORT"
-
-            # 6. Order Blocks & Breakers
-            if metrics["bos"] and metrics["bias"] == "LONG":
-                metrics["order_block"] = df['low'].iloc[last_high_idx - 1]
-                signals.append(f"Bullish Order Block at ${metrics['order_block']:,.2f}")
-                strategies_used.append("Smart Money Order Block (OB) Mapping")
-            if prev_price < last_low_val and current_price > last_low_val:
-                metrics["breaker_block"] = last_low_val
-                signals.append(f"Breaker Block Reclaimed at ${last_low_val:,.2f}")
-                strategies_used.append("SMC Breaker Block (BB) Flipping")
-
-            # 7. Double Tops & Bottoms
-            if abs(sh[-1][1] - sh[-2][1]) / sh[-1][1] < 0.005:
-                signals.append("Double Top Structure")
-                strategies_used.append("Classical Retail Double Top Distribution")
-                metrics["pattern"] = "DOUBLE_TOP"
-                metrics["bias"] = "SHORT"
-            elif abs(sl[-1][1] - sl[-2][1]) / sl[-1][1] < 0.005:
-                signals.append("Double Bottom Structure")
-                strategies_used.append("Classical Retail Double Bottom Accumulation")
-                metrics["pattern"] = "DOUBLE_BOTTOM"
-                metrics["bias"] = "LONG"
-
-            # Slope Profiles
-            x_highs, y_highs = [p[0] for p in sh[-3:]], [p[1] for p in sh[-3:]]
-            slope_highs = np.polyfit(x_highs, y_highs, 1)[0]
-            x_lows, y_lows = [p[0] for p in sl[-3:]], [p[1] for p in sl[-3:]]
-            slope_lows = np.polyfit(x_lows, y_lows, 1)[0]
-            
-            metrics["trendline_bias"] = "BULLISH UPTREND" if slope_highs > 0 else "BEARISH DOWNTREND"
-
-            # 8. Triangle Strategy Logic
-            if slope_highs < -0.001 and slope_lows > 0.001:
-                signals.append("Symmetrical Triangle Pattern Coil")
-                strategies_used.append("Symmetrical Chart Coiling Geometry")
-                metrics["pattern"] = "SYMMETRICAL_TRIANGLE"
-            elif abs(slope_highs) < 0.002 and slope_lows > 0.002:
-                signals.append("Bullish Ascending Triangle Pattern")
-                strategies_used.append("Ascending Triangle Consolidation")
-                metrics["pattern"] = "BULLISH_TRIANGLE"
-                metrics["bias"] = "LONG"
-            elif slope_highs < -0.002 and abs(slope_lows) < 0.002:
-                signals.append("Bearish Descending Triangle Pattern")
-                strategies_used.append("Descending Triangle Distribution")
-                metrics["pattern"] = "BEARISH_TRIANGLE"
-                metrics["bias"] = "SHORT"
-            # 9. Flags & Wedges
-            elif slope_highs > 0 and slope_lows > 0 and metrics["trendline_bias"] == "BULLISH UPTREND":
-                signals.append("Bullish Flag Chart Pattern")
-                strategies_used.append("Flag Trend Continuation")
-                metrics["pattern"] = "BULLISH_FLAG"
-                metrics["bias"] = "LONG"
-            elif slope_highs < 0 and slope_lows < 0 and metrics["trendline_bias"] == "BEARISH DOWNTREND":
-                signals.append("Bearish Flag Chart Pattern")
-                strategies_used.append("Flag Trend Continuation")
-                metrics["pattern"] = "BEARISH_FLAG"
-                metrics["bias"] = "SHORT"
-
-        # =====================================================================
-        # 🔮 UPDATED: PREDICTIVE POI HIGH-CONFLUENCE TARGETING LOOPS
-        # =====================================================================
-        if metrics["bias"] == "LONG" or "BULLISH" in metrics["candle_pattern"]:
-            # Prioritize Order Block overlapping with Fibonacci values, fallback to clear Golden Pocket
-            if metrics["order_block"] and metrics["order_block"] < current_price:
-                metrics["predicted_poi"] = metrics["order_block"]
-            elif metrics["fib_618"] and metrics["fib_618"] < current_price:
-                metrics["predicted_poi"] = metrics["fib_618"]
-                signals.append("Confluence Match: 61.8% Golden Pocket Floor")
-            else:
-                metrics["predicted_poi"] = metrics["support"]
+            elif float(df['Low'].iloc[i-1]) > float(df['High'].iloc[i+1]) and float(df['Close'].iloc[i]) < float(df['Open'].iloc[i]):
+                fvg_top = float(df['Low'].iloc[i-1])
+                fvg_bottom = float(df['High'].iloc[i+1])
+                fvg_list.append({"type": "BEARISH FVG", "top": fvg_top, "bottom": fvg_bottom, "mid": (fvg_top + fvg_bottom)/2})
                 
-        elif metrics["bias"] == "SHORT" or "BEARISH" in metrics["candle_pattern"]:
-            if metrics["breaker_block"] and metrics["breaker_block"] > current_price:
-                metrics["predicted_poi"] = metrics["breaker_block"]
-            elif metrics["fib_618"] and metrics["fib_618"] > current_price:
-                metrics["predicted_poi"] = metrics["fib_618"]
-                signals.append("Confluence Match: 61.8% Golden Pocket Ceiling")
-            else:
-                metrics["predicted_poi"] = metrics["resistance"]
+        return fvg_list
 
-        if candle_pattern != "NONE":
-            metrics["bias"] = "LONG" if "BULLISH" in candle_pattern else "SHORT"
-
-        return signals, list(set(strategies_used)), metrics
-
-# =====================================================================
-# 📊 LAYER 3: WEB APP INTERFACE LAYOUT
-# =====================================================================
-st.set_page_config(page_title="Predictive Strategy Suite", layout="wide", page_icon="🔮")
-st.title("🔮 Predictive High-Timeframe Strategy Suite")
-st.markdown("Advanced workspace calculating impending Point of Interest (POI) horizons before market arrival.")
-st.divider()
-
-if 'engine' not in st.session_state:
-    st.session_state.engine = DataEngine()
-
-st.sidebar.header("🎯 Campaign Settings")
-trade_style = st.sidebar.radio("Select Trading System Horizon:", options=["Day Trade (4-Hour Windows)", "Swing Trade (Daily Windows)"])
-target_pair = st.sidebar.selectbox("Select Target Market:", options=["XAUUSD (Gold)", "GBPUSD (Forex)","EURUSD (Forex)",
-        "USDJPY (Forex)", "USOIL (Crude Oil)", "BTCUSDT (Bitcoin)", "NAS100 (Nasdaq 100)"], index=0)
-scan_button = st.sidebar.button("⚡ Run Predictive Scan", use_container_width=True)
-
-if scan_button or 'first_run' not in st.session_state:
-    st.session_state.first_run = True
-    main_interval = "4h" if trade_style == "Day Trade (4-Hour Windows)" else "1d"
-    
-    with st.spinner(f"Mapping predictive matrix levels for {target_pair}..."):
-        df_chart = st.session_state.engine.fetch_candles(user_symbol=target_pair, interval=main_interval)
-
-    if df_chart is not None:
-        style_label = "Day Trade" if "Day" in trade_style else "Swing Trade"
-        all_signals, strategies_used, metrics = MasterTradingEngine.analyze_market(df_chart, style=style_label)
+    @staticmethod
+    def check_market_structure(df):
+        """Detects Market Structure Breaks (BOS) and Support/Resistance"""
+        if len(df) < 20:
+            return "CONSOLIDATION", 0, 0
+            
+        recent_highs = df['High'].rolling(window=10).max()
+        recent_lows = df['Low'].rolling(window=10).min()
         
-        current_price = df_chart['close'].iloc[-1]
-        master_bias = metrics["bias"]
-        predicted_poi = metrics["predicted_poi"]
-
-        # =====================================================================
-        # 🚨 THE PREDICATIVE "SHOW AND TELL" RADAR CARD
-        # =====================================================================
-        st.subheader("🔮 Impending Point of Interest (POI) Radar")
-        if predicted_poi:
-            distance = abs(current_price - predicted_poi)
-            pct_distance = (distance / current_price) * 100
-            
-            p_col1, p_col2, p_col3 = st.columns([1.5, 1, 2.5])
-            p_col1.metric("PREDICTED POI TARGET ZONE", f"${predicted_poi:,.2f}", help="The system calculated this macro boundary line ahead of time.")
-            p_col2.metric("DISTANCE TO ZONE", f"{pct_distance:.2f}% Away", delta=f"${distance:,.2f} remaining")
-            
-            with p_col3:
-                st.markdown("**🧠 Active Strategies Engine Is Currently Using to Determine This POI:**")
-                if strategies_used:
-                    for strat in strategies_used:
-                        st.markdown(f"✅ ` {strat} `")
-                else:
-                    st.markdown("• Core structural support/resistance horizon bounds.")
-        else:
-            st.info("System is waiting for a clear directional swing anchor to generate a forward-looking POI path.")
-
-        st.divider()
-
-        # =====================================================================
-        # 🎯 DEFINITIVE HIGH TIMEFRAME EXECUTION MATRIX
-        # =====================================================================
-        st.subheader(f"🎯 Definitive {style_label} Execution Output")
+        last_close = float(df['Close'].iloc[-1])
+        prev_high = float(recent_highs.iloc[-2])
+        prev_low = float(recent_lows.iloc[-2])
         
-        if len(all_signals) >= 2 and master_bias != "NEUTRAL" and metrics["candle_pattern"] != "NONE":
-            if master_bias == "LONG":
-                entry_price = current_price
-                stop_loss = df_chart['low'].tail(3).min() * 0.998
-                take_profit = entry_price + ((entry_price - stop_loss) * 3.0)
-                st.success(f"### 🟢 {style_label.upper()} VERDICT: BUY / LONG POSITION EXECUTED")
-            else:
-                entry_price = current_price
-                stop_loss = df_chart['high'].tail(3).max() * 1.002
-                take_profit = entry_price - ((stop_loss - entry_price) * 3.0)
-                st.error(f"### 🔴 {style_label.upper()} VERDICT: SELL / SHORT POSITION EXECUTED")
-
-            # Trade Narrative Explanation
-            st.markdown("#### 📝 Comprehensive Reason for Trade:")
-            narrative = f"A high-probability execution sequence is active on the {main_interval} chart for {target_pair}. The macro trend structure is tracing a **{metrics['trendline_bias']}** signature. "
-            narrative += f"Our matrix has established severe structural confluence via: {', '.join(all_signals)}. "
-            narrative += f"Institutional orders have been validated by a confirmed **{metrics['candle_pattern']}** closing pattern, proving that counter-retail positions have been successfully mitigated."
-            st.markdown(f"> *{narrative}*")
-            
-            st.markdown("---")
-            
-            exec_col1, exec_col2, exec_col3, exec_col4 = st.columns(4)
-            exec_col1.metric("POINT OF INTEREST (POI)", f"${predicted_poi:,.2f}")
-            exec_col2.metric("MARKET ENTRY PRICE", f"${entry_price:,.2f}")
-            exec_col3.metric("SWING STOP LOSS (SL)", f"${stop_loss:,.2f}")
-            exec_col4.metric("TARGET TAKE PROFIT (TP)", f"${take_profit:,.2f}")
-            
+        support = float(df['Low'].tail(30).min())
+        resistance = float(df['High'].tail(30).max())
+        
+        if last_close > prev_high:
+            return "BULLISH BOS (Break of Structure)", support, resistance
+        elif last_close < prev_low:
+            return "BEARISH BOS (Break of Structure)", support, resistance
         else:
-            st.warning("### 💤 SYSTEM FILTER ACTIVE: PRICE OUTSIDE OPTIMAL EXECUTION GATE")
-            st.markdown(f"**Current Status:** The asset is tracking toward the calculated POI zone of **${predicted_poi:,.2f}**. No entry values will print under this block until the market successfully reaches this zone and registers an official confirmation candle signature.")
+            return "CHOPPY MARKET STRUCTURE", support, resistance
 
-        st.divider()
-
-        # =====================================================================
-        # 🔍 SYSTEM LOG CHECKS WITH VISIBLE FIBONACCI READOUTS
-        # =====================================================================
-        st.subheader("🔍 Active Strategy Monitor Checklist")
-        check_col1, check_col2 = st.columns(2)
-        with check_col1:
-            st.info("📊 **Retail Price Action & Fibonacci Grid**")
-            st.markdown(f"• **Major Support Level Floor:** ${metrics['support']:,.2f}")
-            st.markdown(f"• **Major Resistance Level Ceiling:** ${metrics['resistance']:,.2f}")
-            st.markdown(f"• 📉 **Fibonacci 38.2% Line:** ${metrics['fib_382']:,.2f}")
-            st.markdown(f"• 🔥 **Fibonacci 61.8% Golden Pocket:** ${metrics['fib_618']:,.2f}")
-            st.markdown(f"• 🛑 **Fibonacci 78.6% Line:** ${metrics['fib_786']:,.2f}")
-            st.markdown(f"• **Trendline Axis Environment:** `{metrics['trendline_bias']}`")
-            st.markdown(f"• **Active Geometric Pattern:** `{metrics['pattern'] if metrics['pattern'] else 'NONE'}`")
-            st.markdown(f"• **Break & Retest Verified:** `{'YES' if metrics['retest'] else 'NO'}`")
+    @staticmethod
+    def parse_geometric_patterns(df):
+        """Scans trendlines for Wedges, Flags, and Triangles"""
+        if len(df) < 30:
+            return "No Pattern Identified"
             
-        with check_col2:
-            st.success("🏦 **Smart Money & Candle Confirmation**")
-            st.markdown(f"• **🚨 CANDLE CONFIRMATION SIGNATURE:** `{metrics['candle_pattern']}`")
-            st.markdown(f"• **BOS (Break of Structure):** `{'CONFIRMED' if metrics['bos'] else 'NO CHANGE'}`")
-            st.markdown(f"• **Active Order Block Zone:** " + (f"`${metrics['order_block']:,.2f}`" if metrics['order_block'] else "`NONE`"))
-            st.markdown(f"• **Active Breaker Block Level:** " + (f"`${metrics['breaker_block']:,.2f}`" if metrics['breaker_block'] else "`NONE`"))
-            st.markdown(f"• **Wick Liquidity Rejection:** `{'DETECTED' if metrics['rejection'] else 'NONE'}`")
+        closes = df['Close'].tail(20).values
+        highs = df['High'].tail(20).values
+        lows = df['Low'].tail(20).values
+        
+        # Algorithmic slope check for converging lines
+        high_slope = (highs[-1] - highs[0]) / 20
+        low_slope = (lows[-1] - lows[0]) / 20
+        
+        if high_slope < 0 and low_slope > 0:
+            return "📐 SYMMETRICAL TRIANGLE PATTERN"
+        elif high_slope < 0 and low_slope < 0 and abs(high_slope) > abs(low_slope):
+            return "📉 FALLING WEDGE (Bullish Reversal)"
+        elif high_slope > 0 and low_slope > 0 and low_slope > high_slope:
+            return "📈 RISING WEDGE (Bearish Reversal)"
+        elif float(df['High'].max()) == highs[0] and closes[-1] > closes[-5]:
+            return "🚩 BULLISH FLAG PATTERN"
+        else:
+            return "🔄 NO REVENUE-GRADE GEOMETRIC PATTERN DETECTED"
 
-    else:
-        st.error("Market data feed is temporarily resting. Note: Traditional markets like Gold, Oil, Forex, and the Nasdaq index do not tick on weekends!")
+# ==========================================
+# 📡 BACKGROUND TRACKING & MONITORING ENGINE
+# ==========================================
+def run_background_monitor(engine, active_ticker_label):
+    trade = st.session_state.active_trade
+    if trade["status"] == "IDLE":
+        return
+
+    _, _, df_15m, _ = engine.fetch_market_data(trade["ticker_label"])
+    if df_15m.empty:
+        return
+
+    cur_close = float(df_15m['Close'].iloc[-1])
+    cur_low = float(df_15m['Low'].iloc[-1])
+    cur_high = float(df_15m['High'].iloc[-1])
+
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📡 Background Position Tracker")
+    st.sidebar.markdown(f"**Target:** `{trade['ticker_label']}`")
+    st.sidebar.markdown(f"**Engine Mode:** {trade['strategy_source']}")
+
+    if trade["status"] == "PENDING":
+        st.sidebar.warning(f"⏳ Status: WAITING FOR ENTRY (${trade['entry_poi']:.5f})")
+        st.sidebar.metric("Live Market Value", f"${cur_close:.5f}")
+        
+        if (trade["direction"] == "BUY" and cur_close < trade["sl"]) or (trade["direction"] == "SELL" and cur_close > trade["sl"]):
+            st.session_state.active_trade["status"] = "IDLE"
+            st.sidebar.error("❌ Setup Invalidated before execution.")
+            st.rerun()
+
+        if trade["direction"] == "BUY" and cur_low <= trade["entry_poi"]:
+            st.session_state.active_trade["status"] = "ACTIVE"
+            st.toast("🚨 Buy Limit Triggered! Position is Live.", icon="🔥")
+            st.rerun()
+        elif trade["direction"] == "SELL" and cur_high >= trade["entry_poi"]:
+            st.session_state.active_trade["status"] = "ACTIVE"
+            st.toast("🚨 Sell Limit Triggered! Position is Live.", icon="🔥")
+            st.rerun()
+
+    elif trade["status"] == "ACTIVE":
+        st.sidebar.success("🏃 Status: POSITION LIVE & EXECUTING")
+        st.sidebar.metric("Live Price", f"${cur_close:.5f}")
+        
+        if trade["direction"] == "BUY":
+            if cur_low <= trade["sl"]:
+                st.session_state.active_trade["status"] = "LOST"
+                st.rerun()
+            elif cur_high >= trade["tp"]:
+                st.session_state.active_trade["status"] = "WON"
+                st.rerun()
+        elif trade["direction"] == "SELL":
+            if cur_high >= trade["sl"]:
+                st.session_state.active_trade["status"] = "LOST"
+                st.rerun()
+            elif cur_low <= trade["tp"]:
+                st.session_state.active_trade["status"] = "WON"
+                st.rerun()
+
+    elif trade["status"] in ["WON", "LOST"]:
+        if trade["status"] == "WON":
+            st.sidebar.balloons()
+            st.sidebar.success("🎯 TAKE PROFIT HIT! WINNER.")
+        else:
+            st.sidebar.error("❌ STOP LOSS HIT. POSITION CLOSED.")
+
+    if st.sidebar.button("🗑️ Purge Locked Setup from Memory"):
+        st.session_state.active_trade = {"status": "IDLE", "ticker_label": None, "ticker_symbol": None, "direction": None, "entry_poi": None, "sl": None, "tp": None, "strategy_source": None}
+        st.rerun()
+
+# ==========================================
+# INTERFACE FRONTEND LAYOUT
+# ==========================================
+st.title("🎛️ Algorithmic Market Matrix Engine")
+st.write(f"System Operational Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+st.sidebar.header("🎯 Target Selection")
+market_engine = MultiTimeframeEngine()
+selected_label = st.sidebar.selectbox("Select Core Trading Asset:", options=list(market_engine.ticker_map.keys()), index=0)
+
+run_background_monitor(market_engine, selected_label)
+
+if st.sidebar.button("⚡ Run Confluence Suite Scan"):
+    with st.spinner("Analyzing cross-timeframe structural matrices..."):
+        df_4h, df_1h, df_15m, native_symbol = market_engine.fetch_market_data(selected_label)
+        
+        if not df_4h.empty and not df_1h.empty:
+            last_price = float(df_1h['Close'].iloc[-1])
+            
+            # Extract calculations from all system strategies
+            fib_gp, target_tp, block_p, block_name = TechnicalMatrix.extract_fib_and_ob(df_4h)
+            fvg_records = TechnicalMatrix.detect_fair_value_gaps(df_1h)
+            structure_label, static_support, static_resistance = TechnicalMatrix.check_market_structure(df_1h)
+            detected_pattern = TechnicalMatrix.parse_geometric_patterns(df_1h)
+            
+            # UI Metrics Dashboard Display
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Live Execution Valuation", f"${last_price:.5f}")
+            col2.metric("4H Confluence POI", f"${fib_gp:.5f}")
+            col3.metric("Pattern Context", detected_pattern)
+            
+            st.info(f"🛡️ **Structure Analysis:** {structure_label} | **Horizontal Keys:** Support: `${static_support:.5f}` | Resistance: `${static_resistance:.5f}`")
+            
+            # --- INTERACTIVE PLOTLY CANVAS ENGINE ---
+            fig = go.Figure(data=[go.Candlestick(
+                x=df_1h.index, open=df_1h['Open'], high=df_1h['High'], low=df_1h['Low'], close=df_1h['Close'], name="1H Market Feed"
+            )])
+            
+            # Graphing lines for visual tracking
+            fig.add_hline(y=fib_gp, line_dash="dash", line_color="#e11d48", annotation_text="Fib Golden Pocket POI")
+            fig.add_hline(y=static_support, line_dash="solid", line_color="#10b981", annotation_text="Major Support Floor")
+            fig.add_hline(y=static_resistance, line_dash="solid", line_color="#ef4444", annotation_text="Major Resistance Ceiling")
+            
+            # Highlight Fair Value Gaps
+            active_fvg_entry = None
+            if fvg_records:
+                st.subheader("⚠️ Detected Fair Value Gaps (1H Frame)")
+                for fvg in fvg_records[-2:]:
+                    st.warning(f"**{fvg['type']}** found between ${fvg['bottom']:.5f} and ${fvg['top']:.5f}")
+                    fig.add_hrect(y0=fvg['bottom'], y1=fvg['top'], fillcolor="rgba(234, 179, 8, 0.12)", line_width=0)
+                    if active_fvg_entry is None:
+                        active_fvg_entry = fvg['mid']
+            
+            fig.update_layout(title=f"{selected_label} Live Technical Matrix Layout", template="plotly_dark", xaxis_rangeslider_visible=False)
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # --- PERSISTENT CAPTURE MECHANISM ---
+            st.write("---")
+            st.subheader("🔒 Position Protection & Engine Lock System")
+            
+            pred_direction = "BUY" if last_price > fib_gp else "SELL"
+            pred_entry = fib_gp if active_fvg_entry is None else active_fvg_entry
+            pred_sl = pred_entry * 0.995 if pred_direction == "BUY" else pred_entry * 1.005
+            pred_tp = target_tp if pred_direction == "BUY" else pred_entry * 0.98
+            
+            st.write(f"**Calculated Strategy Layout:** Direction: `{pred_direction}` | Target Entry POI: `${pred_entry:.5f}`")
+            
+            if st.session_state.active_trade["status"] == "IDLE":
+                if st.button("🔒 Arm System & Lock Setup to Background Memory"):
+                    st.session_state.active_trade = {
+                        "status": "PENDING",
+                        "ticker_label": selected_label,
+                        "ticker_symbol": native_symbol,
+                        "direction": pred_direction,
+                        "entry_poi": pred_entry,
+                        "sl": pred_sl,
+                        "tp": pred_tp,
+                        "strategy_source": "Unified Multi-Strategy Engine"
+                    }
+                    st.success("Setup safely locked to state memory. The background engine will monitor execution natively on the 15M feed.")
+                    st.rerun()
+            else:
+                st.info(f"System memory currently locked monitoring: `{st.session_state.active_trade['ticker_label']}`.")

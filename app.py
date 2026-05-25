@@ -147,7 +147,6 @@ class TechnicalMatrix:
         highs = df['High'].tail(20).values
         lows = df['Low'].tail(20).values
         
-        # Algorithmic slope check for converging lines
         high_slope = (highs[-1] - highs[0]) / 20
         low_slope = (lows[-1] - lows[0]) / 20
         
@@ -187,11 +186,17 @@ def run_background_monitor(engine, active_ticker_label):
         st.sidebar.warning(f"⏳ Status: WAITING FOR ENTRY (${trade['entry_poi']:.5f})")
         st.sidebar.metric("Live Market Value", f"${cur_close:.5f}")
         
-        if (trade["direction"] == "BUY" and cur_close < trade["sl"]) or (trade["direction"] == "SELL" and cur_close > trade["sl"]):
+        # Check for invalidation based on direction rules
+        if trade["direction"] == "BUY" and cur_close < trade["sl"]:
             st.session_state.active_trade["status"] = "IDLE"
-            st.sidebar.error("❌ Setup Invalidated before execution.")
+            st.sidebar.error("❌ Setup Invalidated: Price dropped below Stop Loss.")
+            st.rerun()
+        elif trade["direction"] == "SELL" and cur_close > trade["sl"]:
+            st.session_state.active_trade["status"] = "IDLE"
+            st.sidebar.error("❌ Setup Invalidated: Price broke above Stop Loss.")
             st.rerun()
 
+        # Check for execution hit
         if trade["direction"] == "BUY" and cur_low <= trade["entry_poi"]:
             st.session_state.active_trade["status"] = "ACTIVE"
             st.toast("🚨 Buy Limit Triggered! Position is Live.", icon="🔥")
@@ -235,6 +240,10 @@ def run_background_monitor(engine, active_ticker_label):
 # INTERFACE FRONTEND LAYOUT
 # ==========================================
 st.title("🎛️ Algorithmic Market Matrix Engine")
+
+# --- INTEGRATED VERSION TAG ---
+st.success("💎 **Active Version:** Upgraded master strategy suite")
+
 st.write(f"System Operational Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 st.sidebar.header("🎯 Target Selection")
@@ -250,13 +259,11 @@ if st.sidebar.button("⚡ Run Confluence Suite Scan"):
         if not df_4h.empty and not df_1h.empty:
             last_price = float(df_1h['Close'].iloc[-1])
             
-            # Extract calculations from all system strategies
             fib_gp, target_tp, block_p, block_name = TechnicalMatrix.extract_fib_and_ob(df_4h)
             fvg_records = TechnicalMatrix.detect_fair_value_gaps(df_1h)
             structure_label, static_support, static_resistance = TechnicalMatrix.check_market_structure(df_1h)
             detected_pattern = TechnicalMatrix.parse_geometric_patterns(df_1h)
             
-            # UI Metrics Dashboard Display
             col1, col2, col3 = st.columns(3)
             col1.metric("Live Execution Valuation", f"${last_price:.5f}")
             col2.metric("4H Confluence POI", f"${fib_gp:.5f}")
@@ -264,17 +271,14 @@ if st.sidebar.button("⚡ Run Confluence Suite Scan"):
             
             st.info(f"🛡️ **Structure Analysis:** {structure_label} | **Horizontal Keys:** Support: `${static_support:.5f}` | Resistance: `${static_resistance:.5f}`")
             
-            # --- INTERACTIVE PLOTLY CANVAS ENGINE ---
             fig = go.Figure(data=[go.Candlestick(
                 x=df_1h.index, open=df_1h['Open'], high=df_1h['High'], low=df_1h['Low'], close=df_1h['Close'], name="1H Market Feed"
             )])
             
-            # Graphing lines for visual tracking
             fig.add_hline(y=fib_gp, line_dash="dash", line_color="#e11d48", annotation_text="Fib Golden Pocket POI")
             fig.add_hline(y=static_support, line_dash="solid", line_color="#10b981", annotation_text="Major Support Floor")
             fig.add_hline(y=static_resistance, line_dash="solid", line_color="#ef4444", annotation_text="Major Resistance Ceiling")
             
-            # Highlight Fair Value Gaps
             active_fvg_entry = None
             if fvg_records:
                 st.subheader("⚠️ Detected Fair Value Gaps (1H Frame)")
@@ -287,16 +291,29 @@ if st.sidebar.button("⚡ Run Confluence Suite Scan"):
             fig.update_layout(title=f"{selected_label} Live Technical Matrix Layout", template="plotly_dark", xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
             
-            # --- PERSISTENT CAPTURE MECHANISM ---
             st.write("---")
             st.subheader("🔒 Position Protection & Engine Lock System")
             
-            pred_direction = "BUY" if last_price > fib_gp else "SELL"
-            pred_entry = fib_gp if active_fvg_entry is None else active_fvg_entry
-            pred_sl = pred_entry * 0.995 if pred_direction == "BUY" else pred_entry * 1.005
-            pred_tp = target_tp if pred_direction == "BUY" else pred_entry * 0.98
+            # --- 🛠️ STABLE MATH OVERHAUL LAYER ---
+            # Dictate bias based on core structure breaks or Order Block states instead of raw locations
+            if "BULLISH" in structure_label or "Bullish" in block_name:
+                pred_direction = "BUY"
+                pred_entry = fib_gp if active_fvg_entry is None else active_fvg_entry
+                pred_sl = static_support if static_support < pred_entry else pred_entry * 0.995
+                pred_tp = target_tp if target_tp > pred_entry else pred_entry * 1.01
+            else:
+                pred_direction = "SELL"
+                pred_entry = fib_gp if active_fvg_entry is None else active_fvg_entry
+                pred_sl = static_resistance if static_resistance > pred_entry else pred_entry * 1.005
+                pred_tp = static_support if static_support < pred_entry else pred_entry * 0.99
             
-            st.write(f"**Calculated Strategy Layout:** Direction: `{pred_direction}` | Target Entry POI: `${pred_entry:.5f}`")
+            # Display metrics formatting beautifully to the UI layout
+            st.markdown(f"### 🎯 Active Target Layout: **{pred_direction}**")
+            
+            col_ent, col_tp, col_sl = st.columns(3)
+            col_ent.metric("Suggested Entry POI", f"${pred_entry:.5f}")
+            col_tp.metric("Take Profit (TP)", f"${pred_tp:.5f}")
+            col_sl.metric("Stop Loss (SL)", f"${pred_sl:.5f}")
             
             if st.session_state.active_trade["status"] == "IDLE":
                 if st.button("🔒 Arm System & Lock Setup to Background Memory"):

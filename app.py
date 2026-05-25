@@ -234,21 +234,67 @@ class MasterTradingEngine:
         return signals, list(set(strategies_used)), metrics
 
 # =====================================================================
-# 📊 LAYER 3: WEB APP INTERFACE LAYOUT
+# 📊 LAYER 3: UPDATED SYSTEM WITH PERSISTENT LIVE MONITORING
 # =====================================================================
 st.set_page_config(page_title="Predictive Strategy Suite", layout="wide", page_icon="🔮")
 st.title("🔮 Predictive High-Timeframe Strategy Suite")
-st.markdown("Advanced workspace calculating impending Point of Interest (POI) horizons before market arrival.")
+st.markdown("Advanced workspace calculating impending Point of Interest (POI) horizons with persistent trade monitoring.")
 st.divider()
 
+# --- INITIALIZE ACTIVE RADAR MEMORY CELLS ---
 if 'engine' not in st.session_state:
     st.session_state.engine = DataEngine()
 
+if 'active_position' not in st.session_state:
+    st.session_state.active_position = {
+        "status": "IDLE",       # IDLE, PENDING, ACTIVE, CLOSED
+        "asset": None,
+        "bias": None,
+        "poi": None,
+        "entry": None,
+        "sl": None,
+        "tp": None,
+        "horizon": None
+    }
+
+# --- TRACK SIDEBAR DISPLAY CONTROLS ---
 st.sidebar.header("🎯 Campaign Settings")
 trade_style = st.sidebar.radio("Select Trading System Horizon:", options=["Day Trade (4-Hour Windows)", "Swing Trade (Daily Windows)"])
 target_pair = st.sidebar.selectbox("Select Target Market:", options=["XAUUSD (Gold)", "GBPUSD (Forex)", "USOIL (Crude Oil)", "BTCUSDT (Bitcoin)", "NAS100 (Nasdaq 100)"], index=0)
 scan_button = st.sidebar.button("⚡ Run Predictive Scan", use_container_width=True)
 
+# --- SIDEBAR LIVE MONITOR READOUT ---
+st.sidebar.divider()
+st.sidebar.subheader("🛰️ Active Radar Tracker")
+pos = st.session_state.active_position
+
+if pos["status"] != "IDLE":
+    st.sidebar.warning(f"🔒 SYSTEM LOCKED: Tracking {pos['style_label']} on {pos['asset']}")
+    st.sidebar.markdown(f"• **Direction Bias:** `{pos['bias']}`")
+    st.sidebar.markdown(f"• **Target POI:** `${pos['poi']:,.2f}`")
+    st.sidebar.markdown(f"• **Stop Loss:** `${pos['sl']:,.2f}`")
+    st.sidebar.markdown(f"• **Take Profit:** `${pos['tp']:,.2f}`")
+    
+    # Live data pulse check to evaluate active position parameters
+    df_live = st.session_state.engine.fetch_candles(user_symbol=pos['asset'], interval="15m")
+    if df_live is not None and not df_live.empty:
+        live_price = df_live['close'].iloc[-1]
+        st.sidebar.metric("Live Market Value", f"${live_price:,.2f}")
+        
+        # Monitor conditions dynamically
+        if pos["bias"] == "LONG" and live_price <= pos["sl"]:
+            st.session_state.active_position["status"] = "CLOSED"
+            st.sidebar.error("❌ Position Stopped Out.")
+        elif pos["bias"] == "LONG" and live_price >= pos["tp"]:
+            st.session_state.active_position["status"] = "CLOSED"
+            st.sidebar.success("🎯 Take Profit Hit!")
+    if st.sidebar.button("🗑️ Clear Radar Lock"):
+        st.session_state.active_position = {"status": "IDLE", "asset": None, "bias": None, "poi": None, "entry": None, "sl": None, "tp": None, "horizon": None}
+        st.rerun()
+else:
+    st.sidebar.info("System scan radar is wide open. Select an asset and initiate a scan to allocate parameters.")
+
+# --- SCAN COMPUTATION LOGIC ---
 if scan_button or 'first_run' not in st.session_state:
     st.session_state.first_run = True
     main_interval = "4h" if trade_style == "Day Trade (4-Hour Windows)" else "1d"
@@ -264,91 +310,54 @@ if scan_button or 'first_run' not in st.session_state:
         master_bias = metrics["bias"]
         predicted_poi = metrics["predicted_poi"]
 
-        # =====================================================================
-        # 🚨 THE PREDICATIVE "SHOW AND TELL" RADAR CARD
-        # =====================================================================
         st.subheader("🔮 Impending Point of Interest (POI) Radar")
         if predicted_poi:
             distance = abs(current_price - predicted_poi)
             pct_distance = (distance / current_price) * 100
             
             p_col1, p_col2, p_col3 = st.columns([1.5, 1, 2.5])
-            p_col1.metric("PREDICTED POI TARGET ZONE", f"${predicted_poi:,.2f}", help="The system calculated this macro boundary line ahead of time.")
+            p_col1.metric("PREDICTED POI TARGET ZONE", f"${predicted_poi:,.2f}")
             p_col2.metric("DISTANCE TO ZONE", f"{pct_distance:.2f}% Away", delta=f"${distance:,.2f} remaining")
             
             with p_col3:
-                st.markdown("**🧠 Active Strategies Engine Is Currently Using to Determine This POI:**")
-                if strategies_used:
-                    for strat in strategies_used:
-                        st.markdown(f"✅ ` {strat} `")
-                else:
-                    st.markdown("• Core structural support/resistance horizon bounds.")
-        else:
-            st.info("System is waiting for a clear directional swing anchor to generate a forward-looking POI path.")
-
+                st.markdown("**🧠 Active Strategies Engine:**")
+                for strat in strategies_used:
+                    st.markdown(f"✅ ` {strat} `")
         st.divider()
 
-        # =====================================================================
-        # 🎯 DEFINITIVE HIGH TIMEFRAME EXECUTION MATRIX
-        # =====================================================================
         st.subheader(f"🎯 Definitive {style_label} Execution Output")
         
+        # Calculate optimal thresholds prior to verification gates
+        calc_sl = df_chart['low'].tail(3).min() * 0.998 if master_bias == "LONG" else df_chart['high'].tail(3).max() * 1.002
+        calc_tp = current_price + ((current_price - calc_sl) * 3.0) if master_bias == "LONG" else current_price - ((calc_sl - current_price) * 3.0)
+
         if len(all_signals) >= 2 and master_bias != "NEUTRAL" and metrics["candle_pattern"] != "NONE":
             if master_bias == "LONG":
-                entry_price = current_price
-                stop_loss = df_chart['low'].tail(3).min() * 0.998
-                take_profit = entry_price + ((entry_price - stop_loss) * 3.0)
-                st.success(f"### 🟢 {style_label.upper()} VERDICT: BUY / LONG POSITION EXECUTED")
+                st.success(f"### 🟢 {style_label.upper()} VERDICT: BUY ZONE CONFIGURATION VALIDATED")
             else:
-                entry_price = current_price
-                stop_loss = df_chart['high'].tail(3).max() * 1.002
-                take_profit = entry_price - ((stop_loss - entry_price) * 3.0)
-                st.error(f"### 🔴 {style_label.upper()} VERDICT: SELL / SHORT POSITION EXECUTED")
-
-            # Trade Narrative Explanation
-            st.markdown("#### 📝 Comprehensive Reason for Trade:")
-            narrative = f"A high-probability execution sequence is active on the {main_interval} chart for {target_pair}. The macro trend structure is tracing a **{metrics['trendline_bias']}** signature. "
-            narrative += f"Our matrix has established severe structural confluence via: {', '.join(all_signals)}. "
-            narrative += f"Institutional orders have been validated by a confirmed **{metrics['candle_pattern']}** closing pattern, proving that counter-retail positions have been successfully mitigated."
-            st.markdown(f"> *{narrative}*")
-            
-            st.markdown("---")
+                st.error(f"### 🔴 {style_label.upper()} VERDICT: SELL ZONE CONFIGURATION VALIDATED")
             
             exec_col1, exec_col2, exec_col3, exec_col4 = st.columns(4)
             exec_col1.metric("POINT OF INTEREST (POI)", f"${predicted_poi:,.2f}")
-            exec_col2.metric("MARKET ENTRY PRICE", f"${entry_price:,.2f}")
-            exec_col3.metric("SWING STOP LOSS (SL)", f"${stop_loss:,.2f}")
-            exec_col4.metric("TARGET TAKE PROFIT (TP)", f"${take_profit:,.2f}")
+            exec_col2.metric("MARKET ENTRY PRICE", f"${current_price:,.2f}")
+            exec_col3.metric("STOP LOSS (SL)", f"${calc_sl:,.2f}")
+            exec_col4.metric("TAKE PROFIT (TP)", f"${calc_tp:,.2f}")
             
+            # --- ARMED TRIGGER LOCK INTERFACE BUTTON ---
+            if st.session_state.active_position["status"] == "IDLE":
+                if st.button("🔒 Arm Radar to Monitor This Setup Live", use_container_width=True):
+                    st.session_state.active_position = {
+                        "status": "PENDING",
+                        "asset": target_pair,
+                        "bias": master_bias,
+                        "poi": predicted_poi,
+                        "entry": current_price,
+                        "sl": calc_sl,
+                        "tp": calc_tp,
+                        "style_label": style_label
+                    }
+                    st.success("Target parameters successfully locked into tracking memory framework.")
+                    st.rerun()
         else:
             st.warning("### 💤 SYSTEM FILTER ACTIVE: PRICE OUTSIDE OPTIMAL EXECUTION GATE")
-            st.markdown(f"**Current Status:** The asset is tracking toward the calculated POI zone of **${predicted_poi:,.2f}**. No entry values will print under this block until the market successfully reaches this zone and registers an official confirmation candle signature.")
-
-        st.divider()
-
-        # =====================================================================
-        # 🔍 SYSTEM LOG CHECKS WITH VISIBLE FIBONACCI READOUTS
-        # =====================================================================
-        st.subheader("🔍 Active Strategy Monitor Checklist")
-        check_col1, check_col2 = st.columns(2)
-        with check_col1:
-            st.info("📊 **Retail Price Action & Fibonacci Grid**")
-            st.markdown(f"• **Major Support Level Floor:** ${metrics['support']:,.2f}")
-            st.markdown(f"• **Major Resistance Level Ceiling:** ${metrics['resistance']:,.2f}")
-            st.markdown(f"• 📉 **Fibonacci 38.2% Line:** ${metrics['fib_382']:,.2f}")
-            st.markdown(f"• 🔥 **Fibonacci 61.8% Golden Pocket:** ${metrics['fib_618']:,.2f}")
-            st.markdown(f"• 🛑 **Fibonacci 78.6% Line:** ${metrics['fib_786']:,.2f}")
-            st.markdown(f"• **Trendline Axis Environment:** `{metrics['trendline_bias']}`")
-            st.markdown(f"• **Active Geometric Pattern:** `{metrics['pattern'] if metrics['pattern'] else 'NONE'}`")
-            st.markdown(f"• **Break & Retest Verified:** `{'YES' if metrics['retest'] else 'NO'}`")
-            
-        with check_col2:
-            st.success("🏦 **Smart Money & Candle Confirmation**")
-            st.markdown(f"• **🚨 CANDLE CONFIRMATION SIGNATURE:** `{metrics['candle_pattern']}`")
-            st.markdown(f"• **BOS (Break of Structure):** `{'CONFIRMED' if metrics['bos'] else 'NO CHANGE'}`")
-            st.markdown(f"• **Active Order Block Zone:** " + (f"`${metrics['order_block']:,.2f}`" if metrics['order_block'] else "`NONE`"))
-            st.markdown(f"• **Active Breaker Block Level:** " + (f"`${metrics['breaker_block']:,.2f}`" if metrics['breaker_block'] else "`NONE`"))
-            st.markdown(f"• **Wick Liquidity Rejection:** `{'DETECTED' if metrics['rejection'] else 'NONE'}`")
-
-    else:
-        st.error("Market data feed is temporarily resting. Note: Traditional markets like Gold, Oil, Forex, and the Nasdaq index do not tick on weekends!")
+            st.markdown(f"**Current Status:** Asset tracking toward POI zone of **${predicted_poi:,.2f}**.")Traditional markets like Gold, Oil, Forex, and the Nasdaq index do not tick on weekends!")

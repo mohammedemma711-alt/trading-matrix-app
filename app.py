@@ -12,10 +12,19 @@ st.set_page_config(page_title="Algorithmic Matrix Suite Pro", layout="wide")
 
 st.markdown("""
     <style>
-    .reportview-container { background: #0e1117; }
-    .stMetric { background-color: #1e293b; padding: 15px; border-radius: 10px; border: 1px solid #334155; }
+    /* Force deep dark theme across the entire application workspace */
+    .stApp, .stMain {
+        background-color: #0b0f19 !important;
+    }
+    /* Style the core technical metric display cards */
+    .stMetric {
+        background-color: #111827 !important;
+        padding: 20px !important;
+        border-radius: 12px !important;
+        border: 1px solid #1f2937 !important;
+    }
     </style>
-""", unsafe_style=html=True)
+""", unsafe_allow_html=True)
 
 # ==========================================
 # 🧠 MEMORY MANAGEMENT LAYER (STATE ENGINE)

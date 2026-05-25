@@ -38,6 +38,8 @@ if "active_trade" not in st.session_state:
         "entry_poi": None,
         "sl": None,
         "tp": None,
+        "rr_ratio": 0.0,
+        "trade_style": None,    # SCALPING, DAY TRADING, SWING TRADING
         "strategy_source": None 
     }
 
@@ -151,23 +153,31 @@ class TechnicalMatrix:
         low_slope = (lows[-1] - lows[0]) / 20
         
         if high_slope < 0 and low_slope > 0:
-            return "📐 SYMMETRICAL TRIANGLE PATTERN"
+            return "📐 SYMMETRICAL TRIANGLE"
         elif high_slope < 0 and low_slope < 0 and abs(high_slope) > abs(low_slope):
-            return "📉 FALLING WEDGE (Bullish Reversal)"
+            return "📉 FALLING WEDGE"
         elif high_slope > 0 and low_slope > 0 and low_slope > high_slope:
-            return "📈 RISING WEDGE (Bearish Reversal)"
+            return "📈 RISING WEDGE"
         elif float(df['High'].max()) == highs[0] and closes[-1] > closes[-5]:
-            return "🚩 BULLISH FLAG PATTERN"
+            return "🚩 BULLISH FLAG"
         else:
-            return "🔄 NO REVENUE-GRADE GEOMETRIC PATTERN DETECTED"
+            return "🔄 RANGE STRUCTURE"
 
 # ==========================================
 # 📡 BACKGROUND TRACKING & MONITORING ENGINE
 # ==========================================
 def run_background_monitor(engine, active_ticker_label):
     trade = st.session_state.active_trade
+    
+    # --- VISUAL RADAR STATE INDICATOR SYSTEM ---
+    st.sidebar.markdown("### 🛰️ System Operational Radar")
     if trade["status"] == "IDLE":
+        st.sidebar.markdown("<h4 style='color:#10b981;margin:0;'>🔍 MODE: SCANNING OPEN MARKETS</h4>", unsafe_allow_html=True)
+        st.sidebar.caption("System is free and actively searching for fresh structural anomalies.")
         return
+    else:
+        st.sidebar.markdown("<h4 style='color:#f59e0b;margin:0;'>🔒 MODE: ARMED & TRACKING LOCK</h4>", unsafe_allow_html=True)
+        st.sidebar.info(f"System memory frozen onto active setup. Ignoring other scans until exit matrix triggers.")
 
     _, _, df_15m, _ = engine.fetch_market_data(trade["ticker_label"])
     if df_15m.empty:
@@ -179,24 +189,23 @@ def run_background_monitor(engine, active_ticker_label):
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("📡 Background Position Tracker")
-    st.sidebar.markdown(f"**Target:** `{trade['ticker_label']}`")
-    st.sidebar.markdown(f"**Engine Mode:** {trade['strategy_source']}")
+    st.sidebar.write(f"**Locked Asset:** `{trade['ticker_label']}`")
+    st.sidebar.write(f"**Classification:** `{trade['trade_style']}` ({trade['direction']})")
+    st.sidebar.write(f"**Target R:R Profile:** `1 : {trade['rr_ratio']:.2f}`")
 
     if trade["status"] == "PENDING":
-        st.sidebar.warning(f"⏳ Status: WAITING FOR ENTRY (${trade['entry_poi']:.5f})")
-        st.sidebar.metric("Live Market Value", f"${cur_close:.5f}")
+        st.sidebar.warning(f"⏳ Status: WAITING FOR POI ENTRY (${trade['entry_poi']:.5f})")
+        st.sidebar.metric("Live Price Distance", f"${cur_close:.5f}")
         
-        # Check for invalidation based on direction rules
         if trade["direction"] == "BUY" and cur_close < trade["sl"]:
             st.session_state.active_trade["status"] = "IDLE"
-            st.sidebar.error("❌ Setup Invalidated: Price dropped below Stop Loss.")
+            st.sidebar.error("❌ Setup Invalidated: Price broke below Stop Loss footprint.")
             st.rerun()
         elif trade["direction"] == "SELL" and cur_close > trade["sl"]:
             st.session_state.active_trade["status"] = "IDLE"
-            st.sidebar.error("❌ Setup Invalidated: Price broke above Stop Loss.")
+            st.sidebar.error("❌ Setup Invalidated: Price broke above Stop Loss footprint.")
             st.rerun()
 
-        # Check for execution hit
         if trade["direction"] == "BUY" and cur_low <= trade["entry_poi"]:
             st.session_state.active_trade["status"] = "ACTIVE"
             st.toast("🚨 Buy Limit Triggered! Position is Live.", icon="🔥")
@@ -208,7 +217,7 @@ def run_background_monitor(engine, active_ticker_label):
 
     elif trade["status"] == "ACTIVE":
         st.sidebar.success("🏃 Status: POSITION LIVE & EXECUTING")
-        st.sidebar.metric("Live Price", f"${cur_close:.5f}")
+        st.sidebar.metric("Live Real-Time Price", f"${cur_close:.5f}")
         
         if trade["direction"] == "BUY":
             if cur_low <= trade["sl"]:
@@ -228,28 +237,26 @@ def run_background_monitor(engine, active_ticker_label):
     elif trade["status"] in ["WON", "LOST"]:
         if trade["status"] == "WON":
             st.sidebar.balloons()
-            st.sidebar.success("🎯 TAKE PROFIT HIT! WINNER.")
+            st.sidebar.success("🎯 TAKE PROFIT HIT! REWARD CAPTURED successfully.")
         else:
-            st.sidebar.error("❌ STOP LOSS HIT. POSITION CLOSED.")
+            st.sidebar.error("❌ STOP LOSS TRIGGERED. POSITION CLOSED.")
 
-    if st.sidebar.button("🗑️ Purge Locked Setup from Memory"):
-        st.session_state.active_trade = {"status": "IDLE", "ticker_label": None, "ticker_symbol": None, "direction": None, "entry_poi": None, "sl": None, "tp": None, "strategy_source": None}
+    if st.sidebar.button("🗑️ Force Release Lock & Resume Free Scan"):
+        st.session_state.active_trade = {"status": "IDLE", "ticker_label": None, "ticker_symbol": None, "direction": None, "entry_poi": None, "sl": None, "tp": None, "rr_ratio": 0.0, "trade_style": None, "strategy_source": None}
         st.rerun()
 
 # ==========================================
 # INTERFACE FRONTEND LAYOUT
 # ==========================================
 st.title("🎛️ Algorithmic Market Matrix Engine")
-
-# --- INTEGRATED VERSION TAG ---
-st.success("💎 **Active Version:** Upgraded master strategy suite")
-
+st.success("💎 **Active Version:** Upgraded master strategy suite v2.5")
 st.write(f"System Operational Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 st.sidebar.header("🎯 Target Selection")
 market_engine = MultiTimeframeEngine()
 selected_label = st.sidebar.selectbox("Select Core Trading Asset:", options=list(market_engine.ticker_map.keys()), index=0)
 
+# Run Background Tracker Execution
 run_background_monitor(market_engine, selected_label)
 
 if st.sidebar.button("⚡ Run Confluence Suite Scan"):
@@ -294,40 +301,66 @@ if st.sidebar.button("⚡ Run Confluence Suite Scan"):
             st.write("---")
             st.subheader("🔒 Position Protection & Engine Lock System")
             
-            # --- 🛠️ STABLE MATH OVERHAUL LAYER ---
-            # Dictate bias based on core structure breaks or Order Block states instead of raw locations
+            # --- 🛠️ ADVANCED R:R & CLASSIFICATION ENGINE ---
             if "BULLISH" in structure_label or "Bullish" in block_name:
                 pred_direction = "BUY"
                 pred_entry = fib_gp if active_fvg_entry is None else active_fvg_entry
-                pred_sl = static_support if static_support < pred_entry else pred_entry * 0.995
-                pred_tp = target_tp if target_tp > pred_entry else pred_entry * 1.01
+                # Stop Loss safely hidden below the support floor
+                pred_sl = static_support if static_support < pred_entry else pred_entry * 0.996
+                # Take Profit target set at the next key structural resistance ceiling
+                pred_tp = static_resistance if static_resistance > pred_entry else target_tp
             else:
                 pred_direction = "SELL"
                 pred_entry = fib_gp if active_fvg_entry is None else active_fvg_entry
-                pred_sl = static_resistance if static_resistance > pred_entry else pred_entry * 1.005
-                pred_tp = static_support if static_support < pred_entry else pred_entry * 0.99
+                # Stop Loss hidden above resistance ceiling
+                pred_sl = static_resistance if static_resistance > pred_entry else pred_entry * 1.004
+                # Take Profit target set down at the support floor
+                pred_tp = static_support if static_support < pred_entry else pred_entry * 0.994
             
-            # Display metrics formatting beautifully to the UI layout
-            st.markdown(f"### 🎯 Active Target Layout: **{pred_direction}**")
+            # Mathematical extraction of absolute risk/reward profiles
+            risk_amt = abs(pred_entry - pred_sl)
+            reward_amt = abs(pred_tp - pred_entry)
+            calculated_rr = reward_amt / risk_amt if risk_amt > 0 else 0.0
             
-            col_ent, col_tp, col_sl = st.columns(3)
+            # Define Trade Style Profile based on pattern geometries and targets
+            if "WEDGE" in detected_pattern or "FLAG" in detected_pattern:
+                assigned_style = "SCALPING PROFILE"
+            elif "BOS" in structure_label:
+                assigned_style = "DAY TRADING PROFILE"
+            else:
+                assigned_style = "SWING TRADING PROFILE"
+            
+            # Display stats to interface layout
+            st.markdown(f"### 📊 Strategy Blueprint: **{assigned_style}** ({pred_direction})")
+            
+            col_ent, col_tp, col_sl, col_rr = st.columns(4)
             col_ent.metric("Suggested Entry POI", f"${pred_entry:.5f}")
-            col_tp.metric("Take Profit (TP)", f"${pred_tp:.5f}")
-            col_sl.metric("Stop Loss (SL)", f"${pred_sl:.5f}")
+            col_tp.metric("Take Profit Target (TP)", f"${pred_tp:.5f}")
+            col_sl.metric("Structural Risk (SL)", f"${pred_sl:.5f}")
+            
+            if calculated_rr >= 2.0:
+                col_rr.metric("Risk-to-Reward Ratio (R:R)", f"1 : {calculated_rr:.2f} ✅")
+            else:
+                col_rr.metric("Risk-to-Reward Ratio (R:R)", f"1 : {calculated_rr:.2f} ⚠️ (Sub-optimal)")
             
             if st.session_state.active_trade["status"] == "IDLE":
-                if st.button("🔒 Arm System & Lock Setup to Background Memory"):
-                    st.session_state.active_trade = {
-                        "status": "PENDING",
-                        "ticker_label": selected_label,
-                        "ticker_symbol": native_symbol,
-                        "direction": pred_direction,
-                        "entry_poi": pred_entry,
-                        "sl": pred_sl,
-                        "tp": pred_tp,
-                        "strategy_source": "Unified Multi-Strategy Engine"
-                    }
-                    st.success("Setup safely locked to state memory. The background engine will monitor execution natively on the 15M feed.")
-                    st.rerun()
+                if calculated_rr >= 2.0:
+                    if st.button("🔒 Arm System & Lock Setup to Background Memory"):
+                        st.session_state.active_trade = {
+                            "status": "PENDING",
+                            "ticker_label": selected_label,
+                            "ticker_symbol": native_symbol,
+                            "direction": pred_direction,
+                            "entry_poi": pred_entry,
+                            "sl": pred_sl,
+                            "tp": pred_tp,
+                            "rr_ratio": calculated_rr,
+                            "trade_style": assigned_style,
+                            "strategy_source": "Unified Multi-Strategy Engine"
+                        }
+                        st.success("Setup safely locked to state memory. The system radar is now frozen on this target.")
+                        st.rerun()
+                else:
+                    st.error("🛑 System Lock Aborted: This setup does not offer a high-grade 1:2 Risk-to-Reward ratio. Let the market reset.")
             else:
-                st.info(f"System memory currently locked monitoring: `{st.session_state.active_trade['ticker_label']}`.")
+                st.info(f"System memory locked. Release the active tracking lock from the sidebar to authorize a new trade profile scan.")

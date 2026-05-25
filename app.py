@@ -12,9 +12,7 @@ st.set_page_config(page_title="Algorithmic Matrix Suite Pro", layout="wide")
 
 st.markdown("""
     <style>
-    .stApp, .stMain {
-        background-color: #0b0f19 !important;
-    }
+    .stApp, .stMain { background-color: #0b0f19 !important; }
     .stMetric {
         background-color: #111827 !important;
         padding: 20px !important;
@@ -25,24 +23,17 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 🧠 MEMORY MANAGEMENT LAYER (STATE ENGINE)
+# 🧠 STATE MANAGEMENT LAYER
 # ==========================================
 if "active_trade" not in st.session_state:
     st.session_state.active_trade = {
-        "status": "IDLE",       # IDLE, PENDING, CONFIRMING, ACTIVE, WON, LOST
-        "ticker_label": None,
-        "ticker_symbol": None,
-        "direction": None,      
-        "entry_poi": None,
-        "sl": None,
-        "tp": None,
-        "rr_ratio": 0.0,
-        "trade_style": None,    
-        "strategy_source": None 
+        "status": "IDLE", "ticker_label": None, "ticker_symbol": None,
+        "direction": None, "entry_poi": None, "sl": None, "tp": None,
+        "rr_ratio": 0.0, "trade_style": None, "strategy_source": None 
     }
 
 # ==========================================
-# 📡 DATA ENGINE (TRI-TIMEFRAME GENERATION)
+# 📡 FINANCIAL DATA ENGINE
 # ==========================================
 class MultiTimeframeEngine:
     def __init__(self):
@@ -57,7 +48,7 @@ class MultiTimeframeEngine:
         }
 
     def fetch_market_data(self, label):
-        symbol = self.ticker_map.get(label, "BTC-USD")
+        symbol = self.ticker_map.get(label, "GC=F")
         try:
             df_4h = yf.download(symbol, period="60d", interval="4h", progress=False)
             df_1h = yf.download(symbol, period="30d", interval="1h", progress=False)
@@ -66,314 +57,223 @@ class MultiTimeframeEngine:
             for df in [df_4h, df_1h, df_15m]:
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
-                    
             return df_4h, df_1h, df_15m, symbol
         except Exception as e:
-            st.error(f"Data engine stream timeout: {str(e)}")
+            st.error(f"Data stream timeout: {str(e)}")
             return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), symbol
 
 # ==========================================
-# 📊 MATHEMATICAL STRATEGY FRAMEWORK
+# 📊 ALIGNED TIME-FRAME CONFLUENCE ENGINE
 # ==========================================
-class TechnicalMatrix:
-    @staticmethod
-    def extract_fib_and_ob(df):
-        if df.empty or len(df) < 50:
-            return 0, 0, 0, "No Block Found"
-        high_max = float(df['High'].max())
-        low_min = float(df['Low'].min())
-        diff = high_max - low_min
-        golden_pocket = high_max - (diff * 0.618)
-        tp_target = high_max - (diff * 0.236)
-        ob_price = float(df['Close'].iloc[-12])
-        ob_type = "Bullish OB" if float(df['Close'].iloc[-1]) > ob_price else "Bearish OB"
-        return golden_pocket, tp_target, ob_price, ob_type
-
-    @staticmethod
-    def detect_fair_value_gaps(df):
-        fvg_list = []
-        if len(df) < 4:
-            return fvg_list
-        for i in range(1, len(df) - 1):
-            if float(df['High'].iloc[i-1]) < float(df['Low'].iloc[i+1]) and float(df['Close'].iloc[i]) > float(df['Open'].iloc[i]):
-                fvg_top = float(df['Low'].iloc[i+1])
-                fvg_bottom = float(df['High'].iloc[i-1])
-                fvg_list.append({"type": "BULLISH FVG", "top": fvg_top, "bottom": fvg_bottom, "mid": (fvg_top + fvg_bottom)/2})
-            elif float(df['Low'].iloc[i-1]) > float(df['High'].iloc[i+1]) and float(df['Close'].iloc[i]) < float(df['Open'].iloc[i]):
-                fvg_top = float(df['Low'].iloc[i-1])
-                fvg_bottom = float(df['High'].iloc[i+1])
-                fvg_list.append({"type": "BEARISH FVG", "top": fvg_top, "bottom": fvg_bottom, "mid": (fvg_top + fvg_bottom)/2})
-        return fvg_list
-
-    @staticmethod
-    def check_market_structure(df):
-        if len(df) < 20:
-            return "CONSOLIDATION", 0, 0
-        recent_highs = df['High'].rolling(window=10).max()
-        recent_lows = df['Low'].rolling(window=10).min()
-        last_close = float(df['Close'].iloc[-1])
-        prev_high = float(recent_highs.iloc[-2])
-        prev_low = float(recent_lows.iloc[-2])
-        support = float(df['Low'].tail(30).min())
-        resistance = float(df['High'].tail(30).max())
-        if last_close > prev_high:
-            return "BULLISH BOS", support, resistance
-        elif last_close < prev_low:
-            return "BEARISH BOS", support, resistance
-        else:
-            return "CHOPPY STRUCTURE", support, resistance
-
-    @staticmethod
-    def parse_geometric_patterns(df):
-        if len(df) < 30:
-            return "No Pattern Identified"
-        closes = df['Close'].tail(20).values
-        highs = df['High'].tail(20).values
-        lows = df['Low'].tail(20).values
-        high_slope = (highs[-1] - highs[0]) / 20
-        low_slope = (lows[-1] - lows[0]) / 20
-        if high_slope < 0 and low_slope > 0:
-            return "📐 SYMMETRICAL TRIANGLE"
-        elif high_slope < 0 and low_slope < 0 and abs(high_slope) > abs(low_slope):
-            return "📉 FALLING WEDGE"
-        elif high_slope > 0 and low_slope > 0 and low_slope > high_slope:
-            return "📈 RISING WEDGE"
-        elif float(df['High'].max()) == highs[0] and closes[-1] > closes[-5]:
-            return "🚩 BULLISH FLAG"
-        else:
-            return "🔄 RANGE STRUCTURE"
-
-# ==========================================
-# 📡 BACKGROUND TRACKING & MONITORING ENGINE
-# ==========================================
-def run_background_monitor(engine, active_ticker_label):
-    trade = st.session_state.active_trade
+class UnifiedConfluenceEngine:
     
-    st.sidebar.markdown("### 🛰️ System Operational Radar")
+    @staticmethod
+    def get_4h_trend_bias(df_4h):
+        """Extracts macro direction based on 4-Hour EMA trend structure"""
+        if df_4h.empty or len(df_4h) < 20:
+            return "BUY"
+        ema_fast = df_4h['Close'].ewm(span=9, adjust=False).mean().iloc[-1]
+        ema_slow = df_4h['Close'].ewm(span=21, adjust=False).mean().iloc[-1]
+        return "BUY" if float(ema_fast) >= float(ema_slow) else "SELL"
+
+    @staticmethod
+    def find_true_fractal_swings(df, window=5):
+        """Scans for valid structural pivots on the execution frame"""
+        df = df.copy()
+        df['Swing_High'] = np.nan
+        df['Swing_Low'] = np.nan
+        
+        for i in range(window, len(df) - window):
+            is_high = True
+            for j in range(1, window + 1):
+                if df['High'].iloc[i] < df['High'].iloc[i-j] or df['High'].iloc[i] < df['High'].iloc[i+j]:
+                    is_high = False
+                    break
+            if is_high: df.at[df.index[i], 'Swing_High'] = float(df['High'].iloc[i])
+                
+            is_low = True
+            for j in range(1, window + 1):
+                if df['Low'].iloc[i] > df['Low'].iloc[i-j] or df['Low'].iloc[i] > df['Low'].iloc[i+j]:
+                    is_low = False
+                    break
+            if is_low: df.at[df.index[i], 'Swing_Low'] = float(df['Low'].iloc[i])
+                
+        high_series = df['Swing_High'].dropna()
+        low_series = df['Swing_Low'].dropna()
+        
+        last_high = float(high_series.iloc[-1]) if not high_series.empty else float(df['High'].max())
+        last_low = float(low_series.iloc[-1]) if not low_series.empty else float(df['Low'].min())
+        
+        return last_high, last_low, df
+
+    @staticmethod
+    def generate_synchronized_setups(df_4h, df_1h, last_price):
+        """Combines all timeframes to create an optimized multi-tiered strategy profile"""
+        # 1. Pull Macro Bias from 4H
+        macro_bias = UnifiedConfluenceEngine.get_4h_trend_bias(df_4h)
+        
+        # 2. Extract Valid 1H Swing Boundaries
+        sw_high, sw_low, detailed_df = UnifiedConfluenceEngine.find_true_fractal_swings(df_1h, window=5)
+        range_width = sw_high - sw_low
+        
+        # 3. Synchronize POIs to align with the dominant Macro Bias
+        if macro_bias == "BUY":
+            structure_status = "BULLISH CONFLUENCE MODE"
+            lt_entry = sw_low + (range_width * 0.382) # Deeper pullback (Premium entry)
+            dt_entry = sw_low + (range_width * 0.500) # Equilibrium mid-range
+            sc_entry = sw_low + (range_width * 0.618) # High-speed shallow momentum entry
+        else:
+            structure_status = "BEARISH CONFLUENCE MODE"
+            lt_entry = sw_high - (range_width * 0.382)
+            dt_entry = sw_high - (range_width * 0.500)
+            sc_entry = sw_high - (range_width * 0.618)
+
+        return macro_bias, structure_status, sw_high, sw_low, lt_entry, dt_entry, sc_entry, detailed_df
+
+# ==========================================
+# 📡 TRACKING MONITOR
+# ==========================================
+def run_background_monitor(engine):
+    trade = st.session_state.active_trade
     if trade["status"] == "IDLE":
         st.sidebar.markdown("<h4 style='color:#10b981;margin:0;'>🔍 MODE: SCANNING OPEN MARKETS</h4>", unsafe_allow_html=True)
         return
-    elif trade["status"] == "PENDING":
-        st.sidebar.markdown("<h4 style='color:#38bdf8;margin:0;'>⏳ MODE: RADAR TRACKING POI</h4>", unsafe_allow_html=True)
-    elif trade["status"] == "CONFIRMING":
-        st.sidebar.markdown("<h4 style='color:#fbbf24;margin:0;'>⚠️ MODE: POI HIT - SCANNING CANDLES</h4>", unsafe_allow_html=True)
-    else:
-        st.sidebar.markdown("<h4 style='color:#f43f5e;margin:0;'>🔒 MODE: POSITION ACTIVE</h4>", unsafe_allow_html=True)
-
+    
+    st.sidebar.markdown(f"<h4 style='color:#fbbf24;margin:0;'>🔒 MONITORING: {trade['trade_style']}</h4>", unsafe_allow_html=True)
     _, _, df_15m, _ = engine.fetch_market_data(trade["ticker_label"])
-    if df_15m.empty:
-        return
+    if df_15m.empty: return
 
     cur_close = float(df_15m['Close'].iloc[-1])
     cur_low = float(df_15m['Low'].iloc[-1])
     cur_high = float(df_15m['High'].iloc[-1])
     
-    # Extract structural details of the last completed 15m candle
-    c_open = float(df_15m['Open'].iloc[-2])
-    c_high = float(df_15m['High'].iloc[-2])
-    c_low = float(df_15m['Low'].iloc[-2])
-    c_close = float(df_15m['Close'].iloc[-2])
-    
-    candle_range = c_high - c_low
+    # 15M Confirmation Candlestick Footprint Calculation
+    c_open, c_high, c_low, c_close = df_15m['Open'].iloc[-2], df_15m['High'].iloc[-2], df_15m['Low'].iloc[-2], df_15m['Close'].iloc[-2]
+    c_range = c_high - c_low
     lower_wick = min(c_open, c_close) - c_low
     upper_wick = c_high - max(c_open, c_close)
 
     st.sidebar.markdown("---")
-    st.sidebar.write(f"**Locked Asset:** `{trade['ticker_label']}`")
-    st.sidebar.write(f"**Target POI:** `${trade['entry_poi']:.5f}`")
+    st.sidebar.write(f"**Asset:** `{trade['ticker_label']}` | **Bias Direction:** `{trade['direction']}`")
+    st.sidebar.write(f"**Armed POI Target:** `${trade['entry_poi']:.2f}`")
+    st.sidebar.metric("Live Market Value", f"${cur_close:.2f}")
 
-    # --- STATE 1: WAITING FOR PRICE TO TOUCH POI ---
     if trade["status"] == "PENDING":
-        st.sidebar.info("🎯 Status: Monitoring approach toward target level...")
-        st.sidebar.metric("Live Market Value", f"${cur_close:.5f}")
-        
-        # Invalidation Check
-        if (trade["direction"] == "BUY" and cur_close < trade["sl"]) or (trade["direction"] == "SELL" and cur_close > trade["sl"]):
-            st.session_state.active_trade["status"] = "IDLE"
-            st.sidebar.error("❌ Setup Invalidated before hitting POI.")
+        if (trade["direction"] == "BUY" and cur_low <= trade["entry_poi"]) or (trade["direction"] == "SELL" and cur_high >= trade["entry_poi"]):
+            st.session_state.active_trade["status"] = "CONFIRMING"
+            st.sidebar.warning("🎯 LEVEL HIT! Waiting for rejection wick close...")
             st.rerun()
 
-        # Touch Condition Triggered
-        if trade["direction"] == "BUY" and cur_low <= trade["entry_poi"]:
-            st.session_state.active_trade["status"] = "CONFIRMING"
-            st.rerun()
-        elif trade["direction"] == "SELL" and cur_high >= trade["entry_poi"]:
-            st.session_state.active_trade["status"] = "CONFIRMING"
-            st.rerun()
-
-    # --- STATE 2: POI TOUCHED - EVALUATING CANDLE CONFIRMATION ---
     elif trade["status"] == "CONFIRMING":
-        st.sidebar.warning("⚡ LEVEL TOUCHED! Analyzing candle footprint validation...")
-        
-        if trade["direction"] == "BUY":
-            # Confirmation Rule: Lower wick must be at least 40% of the entire candle structure
-            if candle_range > 0 and (lower_wick / candle_range) >= 0.40 and c_close > c_open:
-                st.session_state.active_trade["status"] = "ACTIVE"
-                st.toast("🚨 BUY ENTRY CONFIRMED! Institutional footprints detected.", icon="🔥")
-                st.rerun()
-            elif cur_close < trade["sl"]:
-                st.session_state.active_trade["status"] = "IDLE"
-                st.sidebar.error("❌ Confirmation Failed: Price closed past invalidation block.")
-                st.rerun()
-        
-        elif trade["direction"] == "SELL":
-            # Confirmation Rule: Upper wick must be at least 40% of the entire candle structure
-            if candle_range > 0 and (upper_wick / candle_range) >= 0.40 and c_close < c_open:
-                st.session_state.active_trade["status"] = "ACTIVE"
-                st.toast("🚨 SELL ENTRY CONFIRMED! Institutional footprints detected.", icon="🔥")
-                st.rerun()
-            elif cur_close > trade["sl"]:
-                st.session_state.active_trade["status"] = "IDLE"
-                st.sidebar.error("❌ Confirmation Failed: Price closed past invalidation block.")
-                st.rerun()
+        if trade["direction"] == "BUY" and c_range > 0 and (lower_wick / c_range) >= 0.40 and c_close > c_open:
+            st.session_state.active_trade["status"] = "ACTIVE"
+            st.toast("🚨 BUY ENTRY ORDER TRIGGERED!", icon="🔥")
+            st.rerun()
+        elif trade["direction"] == "SELL" and c_range > 0 and (upper_wick / c_range) >= 0.40 and c_close < c_open:
+            st.session_state.active_trade["status"] = "ACTIVE"
+            st.toast("🚨 SELL ENTRY ORDER TRIGGERED!", icon="🔥")
+            st.rerun()
+        elif cur_close < trade["sl"] if trade["direction"] == "BUY" else cur_close > trade["sl"]:
+            st.session_state.active_trade["status"] = "IDLE"
+            st.sidebar.error("❌ Level broken without confirmation.")
+            st.rerun()
 
-    # --- STATE 3: POSITION IS RUNNING LIVE ---
     elif trade["status"] == "ACTIVE":
-        st.sidebar.success("🏃 ENTRY EXECUTED: TRADING ACTIVE")
-        st.sidebar.metric("Live Execution Tracker", f"${cur_close:.5f}")
-        
+        st.sidebar.success("🏃 SETUP RUNNING LIVE")
         if trade["direction"] == "BUY":
-            if cur_low <= trade["sl"]:
-                st.session_state.active_trade["status"] = "LOST"
-                st.rerun()
-            elif cur_high >= trade["tp"]:
-                st.session_state.active_trade["status"] = "WON"
-                st.rerun()
-        elif trade["direction"] == "SELL":
-            if cur_high >= trade["sl"]:
-                st.session_state.active_trade["status"] = "LOST"
-                st.rerun()
-            elif cur_low <= trade["tp"]:
-                st.session_state.active_trade["status"] = "WON"
-                st.rerun()
-
-    elif trade["status"] in ["WON", "LOST"]:
-        if trade["status"] == "WON":
-            st.sidebar.balloons()
-            st.sidebar.success("🎯 TARGET HIT! REWARD CAPTURED.")
+            if cur_low <= trade["sl"]: st.session_state.active_trade["status"] = "LOST"; st.rerun()
+            elif cur_high >= trade["tp"]: st.session_state.active_trade["status"] = "WON"; st.rerun()
         else:
-            st.sidebar.error("❌ STOP TRIGGERED. POSITION CLOSED.")
+            if cur_high >= trade["sl"]: st.session_state.active_trade["status"] = "LOST"; st.rerun()
+            elif cur_low <= trade["tp"]: st.session_state.active_trade["status"] = "WON"; st.rerun()
 
-    if st.sidebar.button("🗑️ Reset Matrix Radar & Unlock Scans"):
+    if st.sidebar.button("🗑️ Reset Engine"):
         st.session_state.active_trade = {"status": "IDLE", "ticker_label": None, "ticker_symbol": None, "direction": None, "entry_poi": None, "sl": None, "tp": None, "rr_ratio": 0.0, "trade_style": None, "strategy_source": None}
         st.rerun()
 
 # ==========================================
-# INTERFACE FRONTEND LAYOUT
+# WORKSPACE DISPLAY INTERFACE
 # ==========================================
-st.title("🎛️ Algorithmic Market Matrix Engine")
-st.success("💎 **Active Version:** Upgraded Triple-POI Master Suite v3.5 (Candle-Confirmed)")
-st.write(f"System Operational Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+st.title("🎛️ Harmonized Multi-Timeframe Matrix Engine")
+st.caption("Strategic Coordination Layer: Synchronizes 4H Trend Bias, 1H Fractal Swings, and 15M Entry confirmations.")
 
-st.sidebar.header("🎯 Target Selection")
 market_engine = MultiTimeframeEngine()
-selected_label = st.sidebar.selectbox("Select Core Trading Asset:", options=list(market_engine.ticker_map.keys()), index=0)
+selected_label = st.sidebar.selectbox("Core Target Asset:", options=list(market_engine.ticker_map.keys()), index=0)
 
-run_background_monitor(market_engine, selected_label)
+run_background_monitor(market_engine)
 
-if st.sidebar.button("⚡ Run Confluence Suite Scan"):
-    with st.spinner("Analyzing multi-timeframe structural dimensions..."):
+if st.sidebar.button("⚡ Run Harmonized Confluence Scan"):
+    with st.spinner("Synchronizing structural layers..."):
         df_4h, df_1h, df_15m, native_symbol = market_engine.fetch_market_data(selected_label)
         
-        if not df_4h.empty and not df_1h.empty and not df_15m.empty:
+        if not df_1h.empty and not df_4h.empty:
             last_price = float(df_1h['Close'].iloc[-1])
             
-            fib_gp, target_tp, block_p, block_name = TechnicalMatrix.extract_fib_and_ob(df_4h)
-            fvg_records = TechnicalMatrix.detect_fair_value_gaps(df_1h)
-            structure_label, static_support, static_resistance = TechnicalMatrix.check_market_structure(df_1h)
-            detected_pattern = TechnicalMatrix.parse_geometric_patterns(df_1h)
+            # Execute top-down timeframe synchronization pipeline
+            bias, struct_lbl, sw_high, sw_low, lt_poi, dt_poi, sc_poi, plotted_df = \
+                UnifiedConfluenceEngine.generate_synchronized_setups(df_4h, df_1h, last_price)
             
-            lt_poi = fib_gp
-            fvg_mid = fvg_records[-1]["mid"] if fvg_records else (static_support + static_resistance) / 2
-            dt_poi = fvg_mid if fvg_mid != 0 else last_price
-            sc_poi = float(df_15m['Close'].iloc[-5])
+            st.subheader("🛡️ Multi-Timeframe Structural Verification")
+            col_d1, col_d2, col_d3 = st.columns(3)
+            col_d1.metric("Live Market Value", f"${last_price:.2f}")
+            col_d2.metric("Verified Swing High Floor", f"${sw_high:.2f}")
+            col_d3.metric("Verified Swing Low Ceiling", f"${sw_low:.2f}")
             
-            direction_bias = "BUY" if ("BULLISH" in structure_label or "Bullish" in block_name) else "SELL"
+            st.info(f"📈 **Macro Condition Matrix:** {struct_lbl} | Dominant 4H Order Flow Bias: **{bias}**")
             
-            st.subheader("📊 Multi-Timeframe Structural Profile")
-            col_m1, col_m2, col_m3 = st.columns(3)
-            col_m1.metric("Live Price Valuation", f"${last_price:.5f}")
-            col_m2.metric("Market Structure Bias", f"{direction_bias} Focus")
-            col_m3.metric("Pattern Context", detected_pattern)
-            
+            # Master Plot
             fig = go.Figure(data=[go.Candlestick(
-                x=df_1h.index, open=df_1h['Open'], high=df_1h['High'], low=df_1h['Low'], close=df_1h['Close'], name="1H Candles"
+                x=plotted_df.index, open=plotted_df['Open'], high=plotted_df['High'], low=plotted_df['Low'], close=plotted_df['Close'], name="1H Candles"
             )])
             
-            fig.add_hline(y=lt_poi, line_dash="dash", line_color="#38bdf8", annotation_text="🌐 Long-Term Swing POI")
-            fig.add_hline(y=dt_poi, line_dash="dot", line_color="#fbbf24", annotation_text="📅 Day Trade POI")
-            fig.add_hline(y=sc_poi, line_dash="dashdot", line_color="#f43f5e", annotation_text="⚡ Scalp POI")
+            # Render clear structural references onto the chart canvas
+            fig.add_hline(y=sw_high, line_dash="solid", line_color="#ef4444", line_width=2, annotation_text="❌ Validated Swing High Anchor")
+            fig.add_hline(y=sw_low, line_dash="solid", line_color="#10b981", line_width=2, annotation_text="✅ Validated Swing Low Anchor")
+            
+            fig.add_hline(y=lt_poi, line_dash="dash", line_color="#38bdf8", annotation_text="🌐 UNIFIED SWING POI")
+            fig.add_hline(y=dt_poi, line_dash="dot", line_color="#fbbf24", annotation_text="📅 UNIFIED DAY TRADE POI")
+            fig.add_hline(y=sc_poi, line_dash="dashdot", line_color="#f43f5e", annotation_text="⚡ UNIFIED SCALP POI")
             
             fig.update_layout(template="plotly_dark", xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
             
-            st.write("---")
-            st.subheader("🎯 Automated Triple-POI Target Configurations")
+            # Build and display target configurations
+            st.markdown("---")
+            st.subheader("🎯 Synchronized Strategy Blueprint Outputs")
             
             pois_config = [
-                {"style": "LONG-TERM SWING SETUP", "entry": lt_poi, "sl_offset": 0.015, "tp_offset": 0.045},
-                {"style": "DAY TRADING SETUP", "entry": dt_poi, "sl_offset": 0.005, "tp_offset": 0.018},
-                {"style": "SCALPING PROFILE SETUP", "entry": sc_poi, "sl_offset": 0.002, "tp_offset": 0.006}
+                {"style": "LONG-TERM SWING SETUP", "entry": lt_poi, "sl_offset": 0.012, "tp_offset": 0.045},
+                {"style": "DAY TRADING SETUP", "entry": dt_poi, "sl_offset": 0.005, "tp_offset": 0.020},
+                {"style": "SCALPING PROFILE SETUP", "entry": sc_poi, "sl_offset": 0.002, "tp_offset": 0.008}
             ]
             
-            best_rr = 0.0
-            smart_recommended_style = "DAY TRADING SETUP"
-            processed_cards = []
+            l1, l2, l3 = st.columns(3)
+            lanes = [l1, l2, l3]
+            processed_setups = []
             
-            for config in pois_config:
+            for index, config in enumerate(pois_config):
                 ent = config["entry"]
-                if direction_bias == "BUY":
-                    sl = ent * (1.0 - config["sl_offset"])
-                    tp = ent * (1.0 + config["tp_offset"])
-                else:
-                    sl = ent * (1.0 + config["sl_offset"])
-                    tp = ent * (1.0 - config["tp_offset"])
+                sl = ent * (1.0 - config["sl_offset"]) if bias == "BUY" else ent * (1.0 + config["sl_offset"])
+                tp = ent * (1.0 + config["tp_offset"]) if bias == "BUY" else ent * (1.0 - config["tp_offset"])
+                rr = abs(tp - ent) / abs(ent - sl)
+                processed_setups.append({"style": config["style"], "entry": ent, "sl": sl, "tp": tp, "rr": rr})
                 
-                risk = abs(ent - sl)
-                reward = abs(tp - ent)
-                rr = reward / risk if risk > 0 else 0.0
-                
-                if rr > best_rr:
-                    best_rr = rr
-                    smart_recommended_style = config["style"]
-                    
-                processed_cards.append({"style": config["style"], "entry": ent, "sl": sl, "tp": tp, "rr": rr})
-            
-            lane1, lane2, lane3 = st.columns(3)
-            lanes = [lane1, lane2, lane3]
-            
-            for index, card in enumerate(processed_cards):
                 with lanes[index]:
-                    st.markdown(f"#### `{card['style']}`")
-                    st.write(f"**POI Entry Target:** `${card['entry']:.5f}`")
-                    st.write(f"**Take Profit:** `${card['tp']:.5f}`")
-                    st.write(f"**Stop Loss:** `${card['sl']:.5f}`")
-                    st.write(f"**Risk Profile Ratio:** `1 : {card['rr']:.2f}`")
-                    
-                    if card['style'] == smart_recommended_style:
-                        st.success("⭐ SMART ENGINE CHOICE: OPTIMAL RISK PROFILE")
+                    st.markdown(f"### `{config['style']}`")
+                    st.markdown(f"**Synchronized POI:** `${ent:.2f}`")
+                    st.write(f"**Risk Profile Ratio:** `1 : {rr:.2f}`")
             
             st.write("---")
-            st.subheader("🔒 Target Optimization Arming Lock")
-            
-            chosen_style_label = st.selectbox("Select the specific POI target array to arm and monitor:", options=[c["style"] for c in processed_cards])
-            selected_setup = next(item for item in processed_cards if item["style"] == chosen_style_label)
+            st.subheader("🔒 Arm Synchronized Matrix Router")
+            chosen_style = st.selectbox("Select high-confluence target array to arm:", options=[c["style"] for c in pois_config])
+            selected_setup = next(item for item in processed_setups if item["style"] == chosen_style)
             
             if st.session_state.active_trade["status"] == "IDLE":
-                if st.button("🔒 Arm System with Intelligent Candle Confirmation"):
+                if st.button("🔒 Arm System Strategy Suite"):
                     st.session_state.active_trade = {
-                        "status": "PENDING",
-                        "ticker_label": selected_label,
-                        "ticker_symbol": native_symbol,
-                        "direction": direction_bias,
-                        "entry_poi": selected_setup["entry"],
-                        "sl": selected_setup["sl"],
-                        "tp": selected_setup["tp"],
-                        "rr_ratio": selected_setup["rr"],
-                        "trade_style": selected_setup["style"],
-                        "strategy_source": "Triple-POI Matrix Router"
+                        "status": "PENDING", "ticker_label": selected_label, "ticker_symbol": native_symbol,
+                        "direction": bias, "entry_poi": selected_setup["entry"], "sl": selected_setup["sl"], "tp": selected_setup["tp"],
+                        "rr_ratio": selected_setup["rr"], "trade_style": selected_setup["style"], "strategy_source": "Unified Multi-Timeframe Engine"
                     }
-                    st.success(f"System armed successfully! Caching parameters. Engine will monitor for touch and confirmation automatically.")
+                    st.success(f"System armed! Background matrix linked to `{selected_setup['style']}`.")
                     st.rerun()
-            else:
-                st.info(f"System memory currently locked onto an active target.")
